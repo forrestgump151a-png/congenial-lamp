@@ -10,6 +10,7 @@ import anthropic
 import json
 import os
 import re
+import readline
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -558,52 +559,248 @@ def save_result(result: ExegesisResult, output_dir: str = ".") -> str:
 
 # ── インタラクティブモード ────────────────────────────────────────────────
 
-HELP_TEXT = """
-使い方：
-  聖書箇所を入力 → 釈義レポートと信頼性チェック結果を表示
+# ── 聖書書物データ ───────────────────────────────────────────────────────
 
-入力例：
-  ヨハネ3:16
-  マタイ5:3-12
-  創世記1:1
-  Genesis 1:1
-  ローマ8:28-39
-  詩篇23篇
+# (日本語名, 英語名, 略称リスト, 総章数)
+BIBLE_BOOKS: list[tuple[str, str, list[str], int]] = [
+    # 旧約聖書
+    ("創世記",      "Genesis",          ["Gen", "創"],   50),
+    ("出エジプト記","Exodus",            ["Exo", "出"],   40),
+    ("レビ記",      "Leviticus",         ["Lev", "レビ"], 27),
+    ("民数記",      "Numbers",           ["Num", "民"],   36),
+    ("申命記",      "Deuteronomy",       ["Deu", "申"],   34),
+    ("ヨシュア記",  "Joshua",            ["Jos", "ヨシュ"],24),
+    ("士師記",      "Judges",            ["Jdg", "士師"], 21),
+    ("ルツ記",      "Ruth",              ["Rut", "ルツ"],  4),
+    ("サムエル記上","1 Samuel",          ["1Sa", "サム上"],31),
+    ("サムエル記下","2 Samuel",          ["2Sa", "サム下"],24),
+    ("列王記上",    "1 Kings",           ["1Ki", "王上"], 22),
+    ("列王記下",    "2 Kings",           ["2Ki", "王下"], 25),
+    ("歴代誌上",    "1 Chronicles",      ["1Ch", "代上"], 29),
+    ("歴代誌下",    "2 Chronicles",      ["2Ch", "代下"], 36),
+    ("エズラ記",    "Ezra",              ["Ezr", "エズ"], 10),
+    ("ネヘミヤ記",  "Nehemiah",          ["Neh", "ネヘ"], 13),
+    ("エステル記",  "Esther",            ["Est", "エス"], 10),
+    ("ヨブ記",      "Job",               ["Job", "ヨブ"], 42),
+    ("詩篇",        "Psalms",            ["Psa", "詩"],  150),
+    ("箴言",        "Proverbs",          ["Pro", "箴"],   31),
+    ("伝道の書",    "Ecclesiastes",      ["Ecc", "伝"],   12),
+    ("雅歌",        "Song of Solomon",   ["Son", "雅"],    8),
+    ("イザヤ書",    "Isaiah",            ["Isa", "イザ"], 66),
+    ("エレミヤ書",  "Jeremiah",          ["Jer", "エレ"], 52),
+    ("哀歌",        "Lamentations",      ["Lam", "哀"],    5),
+    ("エゼキエル書","Ezekiel",           ["Eze", "エゼ"], 48),
+    ("ダニエル書",  "Daniel",            ["Dan", "ダニ"], 12),
+    ("ホセア書",    "Hosea",             ["Hos", "ホセ"], 14),
+    ("ヨエル書",    "Joel",              ["Joe", "ヨエ"],  3),
+    ("アモス書",    "Amos",              ["Amo", "アモ"],  9),
+    ("オバデヤ書",  "Obadiah",           ["Oba", "オバ"],  1),
+    ("ヨナ書",      "Jonah",             ["Jon", "ヨナ"],  4),
+    ("ミカ書",      "Micah",             ["Mic", "ミカ"],  7),
+    ("ナホム書",    "Nahum",             ["Nah", "ナホ"],  3),
+    ("ハバクク書",  "Habakkuk",          ["Hab", "ハバ"],  3),
+    ("ゼパニヤ書",  "Zephaniah",         ["Zep", "ゼパ"],  3),
+    ("ハガイ書",    "Haggai",            ["Hag", "ハガ"],  2),
+    ("ゼカリヤ書",  "Zechariah",         ["Zec", "ゼカ"], 14),
+    ("マラキ書",    "Malachi",           ["Mal", "マラ"],  4),
+    # 新約聖書
+    ("マタイ福音書","Matthew",           ["Mat", "マタイ","マタ"],28),
+    ("マルコ福音書","Mark",              ["Mar", "マルコ","マル"],16),
+    ("ルカ福音書",  "Luke",              ["Luk", "ルカ"], 24),
+    ("ヨハネ福音書","John",              ["Joh", "ヨハネ","ヨハ"],21),
+    ("使徒言行録",  "Acts",              ["Act", "使徒"], 28),
+    ("ローマ書",    "Romans",            ["Rom", "ロマ"], 16),
+    ("コリント一",  "1 Corinthians",     ["1Co", "コリ一"],16),
+    ("コリント二",  "2 Corinthians",     ["2Co", "コリ二"],13),
+    ("ガラテヤ書",  "Galatians",         ["Gal", "ガラ"],  6),
+    ("エフェソ書",  "Ephesians",         ["Eph", "エフ"],  6),
+    ("フィリピ書",  "Philippians",       ["Phi", "フィリ"], 4),
+    ("コロサイ書",  "Colossians",        ["Col", "コロ"],  4),
+    ("テサロニケ一","1 Thessalonians",   ["1Th", "テサ一"], 5),
+    ("テサロニケ二","2 Thessalonians",   ["2Th", "テサ二"], 3),
+    ("テモテ一",    "1 Timothy",         ["1Ti", "テモ一"], 6),
+    ("テモテ二",    "2 Timothy",         ["2Ti", "テモ二"], 4),
+    ("テトス書",    "Titus",             ["Tit", "テト"],  3),
+    ("ピレモン書",  "Philemon",          ["Phm", "ピレ"],  1),
+    ("ヘブライ書",  "Hebrews",           ["Heb", "ヘブ"], 13),
+    ("ヤコブ書",    "James",             ["Jam", "ヤコ"],  5),
+    ("ペテロ一",    "1 Peter",           ["1Pe", "ペテ一"], 5),
+    ("ペテロ二",    "2 Peter",           ["2Pe", "ペテ二"], 3),
+    ("ヨハネ一",    "1 John",            ["1Jo", "ヨハ一"], 5),
+    ("ヨハネ二",    "2 John",            ["2Jo", "ヨハ二"], 1),
+    ("ヨハネ三",    "3 John",            ["3Jo", "ヨハ三"], 1),
+    ("ユダ書",      "Jude",              ["Jud", "ユダ"],  1),
+    ("黙示録",      "Revelation",        ["Rev", "黙"],   22),
+]
 
-コマンド：
-  save      直前の結果をJSONファイルに保存
-  help      このヘルプを表示
-  quit      終了
-"""
+# 検索用フラット辞書 {正規化キー → (日本語名, 総章数)}
+_BOOK_LOOKUP: dict[str, tuple[str, int]] = {}
+for _jp, _en, _abbrs, _chaps in BIBLE_BOOKS:
+    for _key in [_jp, _en] + _abbrs:
+        _BOOK_LOOKUP[_key.lower()] = (_jp, _chaps)
 
-PASSAGE_PATTERN = re.compile(
-    r"^([\w぀-ヿ一-鿿]+)\s*(\d+)\s*[:\：]\s*(\d+)(?:[-–]\d+)?$",
-    re.UNICODE,
+# タブ補完用候補リスト（日本語名 + 英語名）
+_COMPLETION_WORDS = (
+    [b[0] for b in BIBLE_BOOKS]
+    + [b[1] for b in BIBLE_BOOKS]
+    + ["save", "books", "help", "quit"]
 )
 
 
+def _setup_readline():
+    """タブ補完と入力履歴を設定する。"""
+    def completer(text: str, state: int):
+        options = [w for w in _COMPLETION_WORDS if w.lower().startswith(text.lower())]
+        return options[state] if state < len(options) else None
+
+    readline.set_completer(completer)
+    readline.parse_and_bind("tab: complete")
+    # 履歴ファイル
+    history_file = Path.home() / ".bible_exegesis_history"
+    try:
+        if history_file.exists():
+            readline.read_history_file(str(history_file))
+    except Exception:
+        pass
+
+    import atexit
+    atexit.register(lambda: readline.write_history_file(str(history_file)))
+
+
+def _normalize_passage(text: str) -> str:
+    """様々な表記を正規化する。
+
+    対応パターン：
+      詩篇23篇        → 詩篇23
+      ヨハネ3章16節   → ヨハネ3:16
+      John 3:16       → John 3:16（そのまま）
+      ヨハネ三書1:1   → ヨハネ三1:1
+    """
+    t = text.strip()
+    # 全角コロン → 半角
+    t = t.replace("：", ":").replace("　", " ")
+    # 「章」→「:」、「節」除去、「篇」除去
+    # 「N篇M節」→「N:M」（詩篇23篇1節 → 詩篇23:1）
+    t = re.sub(r"(\d+)篇(\d+)節?", r"\1:\2", t)
+    # 「N篇」（節なし）→「N」
+    t = re.sub(r"(\d+)篇", r"\1", t)
+    # 「章」→「:」、「節」除去
+    t = re.sub(r"章\s*", ":", t)
+    t = re.sub(r"節", "", t)
+    # 重複コロン除去
+    t = re.sub(r":+", ":", t)
+    t = t.strip(":")
+    return t.strip()
+
+
+def _lookup_book(name: str) -> tuple[str, int] | None:
+    """書物名（日本語・英語・略称）から (正規日本語名, 総章数) を返す。"""
+    return _BOOK_LOOKUP.get(name.lower())
+
+
+def _show_books():
+    """全書物を旧約・新約に分けて表示する。"""
+    ot = BIBLE_BOOKS[:39]
+    nt = BIBLE_BOOKS[39:]
+
+    print(f"\n{'─' * WIDTH}")
+    print("  旧約聖書  （39書）")
+    print(f"{'─' * WIDTH}")
+    for i, (jp, en, abbrs, chaps) in enumerate(ot, 1):
+        print(f"  {i:2d}. {jp:<12} {en:<22} {chaps:3d}章")
+
+    print(f"\n{'─' * WIDTH}")
+    print("  新約聖書  （27書）")
+    print(f"{'─' * WIDTH}")
+    for i, (jp, en, abbrs, chaps) in enumerate(nt, 40):
+        print(f"  {i:2d}. {jp:<12} {en:<22} {chaps:3d}章")
+
+    print(f"\n  番号を入力すると書物を選択できます（例：1 → 創世記）\n")
+
+
+def _select_by_number(num: int) -> str | None:
+    """番号から書物日本語名を返す（1-66）。"""
+    if 1 <= num <= len(BIBLE_BOOKS):
+        return BIBLE_BOOKS[num - 1][0]
+    return None
+
+
+def _guide_chapter_verse(book_jp: str, total_chapters: int) -> str:
+    """書物選択後の章節入力ガイド文字列を返す。"""
+    if total_chapters == 1:
+        return f"{book_jp}（1章のみ） → 例：{book_jp}1:1"
+    return (
+        f"{book_jp}（全{total_chapters}章） → "
+        f"例：{book_jp}1:1 / {book_jp}{total_chapters}:1 / "
+        f"{book_jp}1（章全体）"
+    )
+
+
+HELP_TEXT = """
+使い方：
+  聖書箇所を直接入力、または番号で書物を選択してから章節を指定
+
+入力形式（すべて対応）：
+  ヨハネ3:16          ← 標準形式
+  マタイ5:3-12        ← 範囲指定
+  創世記1:1           ← 日本語書物名
+  Genesis 1:1         ← 英語書物名
+  詩篇23篇            ← 「篇」付き
+  ルカ2章14節         ← 「章・節」表記
+  ローマ8:28-39       ← 範囲
+  ヨハネ3（章全体）   ← 章全体を分析
+  19                  ← 番号で書物選択（19=詩篇）
+
+コマンド：
+  books     全書物一覧を表示
+  save      直前の結果をJSONファイルに保存
+  help      このヘルプを表示
+  quit      終了
+
+タブキーで書物名・コマンドを補完できます。
+"""
+
+
 def _validate_passage(text: str) -> tuple[bool, str]:
-    """聖書箇所として最低限有効な形式かチェックする。"""
-    text = text.strip()
+    """聖書箇所として最低限有効かチェックする。"""
     if not text:
         return False, "箇所が空です"
-    if len(text) > 80:
-        return False, "入力が長すぎます（80文字以内）"
-    # 数字だけの入力を除外
-    if text.isdigit():
-        return False, "聖書箇所の形式で入力してください（例：ヨハネ3:16）"
+    if len(text) > 100:
+        return False, "入力が長すぎます（100文字以内）"
     return True, ""
 
 
+def _run_analysis(passage: str, last_result_ref: list) -> bool:
+    """釈義を実行し結果を表示。last_result_ref[0] に格納。True=成功。"""
+    try:
+        result = analyze_passage(passage)
+        print_result(result)
+        last_result_ref[0] = result
+        print("  ヒント：'save' で結果をJSONファイルに保存できます。")
+        return True
+    except json.JSONDecodeError as e:
+        print(f"\nJSON解析エラー: {e}\n再度お試しください。")
+    except anthropic.APIError as e:
+        print(f"\nAPIエラー: {e}")
+    except RuntimeError as e:
+        print(f"\nエラー: {e}")
+    except Exception as e:
+        print(f"\n予期せぬエラー: {e}")
+    return False
+
+
 def interactive_mode():
-    print("=" * WIDTH)
+    _setup_readline()
+
+    print("═" * WIDTH)
     print("  聖書釈義ツール (Bible Exegesis Tool)")
-    print("  歴史・文化・地理・経済・考古学の多角的分析 + 信頼性チェック")
-    print("=" * WIDTH)
-    print("'help' でヘルプを表示。'quit' で終了。")
+    print("  歴史・文化・地理・経済・考古学の多角的分析 ＋ 信頼性チェック")
+    print("═" * WIDTH)
+    print("  書物名・章節を入力　／　番号で書物選択　／　Tab補完対応")
+    print("  'books' で全書物一覧　'help' でヘルプ　'quit' で終了")
     print()
 
-    last_result: ExegesisResult | None = None
+    last_result: list = [None]   # mutable wrapper
 
     while True:
         try:
@@ -617,6 +814,7 @@ def interactive_mode():
 
         cmd = user_input.lower()
 
+        # ── コマンド処理 ──
         if cmd in ("quit", "exit", "終了", "q"):
             print("終了します。")
             break
@@ -625,36 +823,76 @@ def interactive_mode():
             print(HELP_TEXT)
             continue
 
+        if cmd == "books":
+            _show_books()
+            continue
+
         if cmd == "save":
-            if last_result is None:
+            if last_result[0] is None:
                 print("保存できる結果がありません。先に釈義を実行してください。")
             else:
                 try:
-                    path = save_result(last_result)
+                    path = save_result(last_result[0])
                     print(f"保存しました：{path}")
                 except Exception as e:
                     print(f"保存エラー：{e}")
+            print()
             continue
 
-        valid, msg = _validate_passage(user_input)
+        # ── 番号入力（書物選択） ──
+        if user_input.isdigit():
+            num = int(user_input)
+            book = _select_by_number(num)
+            if book is None:
+                print(f"  1〜{len(BIBLE_BOOKS)} の番号を入力してください。")
+                continue
+            _, total = _BOOK_LOOKUP[book.lower()]
+            guide = _guide_chapter_verse(book, total)
+            print(f"  選択：{guide}")
+            try:
+                spec = input(f"  章節 > {book}").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                continue
+            passage_raw = book + spec
+            passage = _normalize_passage(passage_raw)
+            print()
+            _run_analysis(passage, last_result)
+            print()
+            continue
+
+        # ── 書物名だけの入力（章節ガイド表示） ──
+        normalized = _normalize_passage(user_input)
+        # 数字・コロンなしで書物名だけっぽい場合
+        if not any(c.isdigit() for c in normalized):
+            info = _lookup_book(normalized)
+            if info:
+                jp_name, total = info
+                guide = _guide_chapter_verse(jp_name, total)
+                print(f"  {guide}")
+                try:
+                    spec = input(f"  章節 > {jp_name}").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    continue
+                passage_raw = jp_name + spec
+                passage = _normalize_passage(passage_raw)
+                print()
+                _run_analysis(passage, last_result)
+                print()
+                continue
+
+        # ── 通常の聖書箇所入力 ──
+        passage = normalized
+        valid, msg = _validate_passage(passage)
         if not valid:
-            print(f"入力エラー：{msg}")
+            print(f"  入力エラー：{msg}")
+            print("  例：ヨハネ3:16 / 19（番号）/ books（一覧）")
+            print()
             continue
 
-        try:
-            result = analyze_passage(user_input)
-            print_result(result)
-            last_result = result
-            print("  ヒント：'save' で結果をJSONファイルに保存できます。")
-        except json.JSONDecodeError as e:
-            print(f"\nJSON解析エラー: {e}\n再度お試しください。")
-        except anthropic.APIError as e:
-            print(f"\nAPIエラー: {e}")
-        except RuntimeError as e:
-            print(f"\nエラー: {e}")
-        except Exception as e:
-            print(f"\n予期せぬエラー: {e}")
-
+        print()
+        _run_analysis(passage, last_result)
         print()
 
 
