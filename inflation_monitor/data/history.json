@@ -1,0 +1,33 @@
+{
+  "bei_10y": {
+    "label": "BEI（10年ブレークイーブンインフレ率）",
+    "observations": [],
+    "consecutive_failures": 0
+  },
+  "tankan_5y": {
+    "label": "日銀短観 企業の物価見通し（物価全般・5年後・全規模全産業）",
+    "observations": [
+      {
+        "date": "2026-06-01",
+        "value": 2.6,
+        "source_url": "https://www.boj.or.jp/statistics/tk/bukka/index.htm",
+        "note": "2026年6月調査（7/1公表）。初期値として手動登録。次回は10月公表予定。",
+        "confidence": "high"
+      }
+    ],
+    "consecutive_failures": 0
+  },
+  "survey_5y_kanari": {
+    "label": "生活意識アンケート 5年後の物価「かなり上がる」回答割合",
+    "observations": [
+      {
+        "date": "2026-06-01",
+        "value": 51.3,
+        "source_url": "https://www.boj.or.jp/research/o_survey/index.htm",
+        "note": "2026年6月調査。初期値として手動登録。次回は10月公表予定。",
+        "confidence": "high"
+      }
+    ],
+    "consecutive_failures": 0
+  }
+}

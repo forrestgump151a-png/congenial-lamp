@@ -1,0 +1,55 @@
+name: Japan Inflation Expectations Monitor
+
+on:
+  schedule:
+    # 平日 09:15 JST（= 00:15 UTC）。BEIの前営業日引値と、四半期公表の検知を毎朝チェック
+    - cron: "15 0 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: inflation-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r inflation_monitor/requirements.txt
+
+      - name: Run monitor
+        run: python -m inflation_monitor.monitor run
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add inflation_monitor/data/history.json inflation_monitor/data/latest.md
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: インフレ期待データ更新 ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+
+      - name: Open alert issue
+        if: ${{ hashFiles('inflation_monitor/data/alert_body.md') != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "$(cat inflation_monitor/data/alert_title.txt)" \
+            --body-file inflation_monitor/data/alert_body.md \
+            --label "inflation-monitor" || \
+          gh issue create \
+            --title "$(cat inflation_monitor/data/alert_title.txt)" \
+            --body-file inflation_monitor/data/alert_body.md
