@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-聖書釈義ツール Webアプリ
+聖書釈義ツール + 説教例話収集ツール Webアプリ
 """
 
 import json
@@ -24,6 +24,7 @@ from bible_exegesis import (
     ExegesisResult,
     Source,
 )
+from sermon_illustrations import CATEGORIES, generate_illustrations
 from datetime import datetime
 
 app = Flask(__name__)
@@ -45,9 +46,11 @@ HTML = r"""<!DOCTYPE html>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', 'Noto Sans JP', sans-serif; min-height: 100vh; }
 
-  header { background: var(--accent); padding: 1.2rem 2rem; border-bottom: 2px solid var(--gold); display: flex; align-items: center; gap: 1rem; }
+  header { background: var(--accent); padding: 1.2rem 2rem; border-bottom: 2px solid var(--gold); display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.4rem; color: var(--gold); letter-spacing: .05em; }
   header span { color: var(--muted); font-size: .85rem; }
+  header a.nav-link { color: var(--muted); font-size: .82rem; text-decoration: none; margin-left: auto; border: 1px solid var(--border); padding: .3rem .8rem; border-radius: 4px; }
+  header a.nav-link:hover { border-color: var(--gold); color: var(--gold); }
 
   .layout { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 64px); }
 
@@ -174,6 +177,7 @@ HTML = r"""<!DOCTYPE html>
 <header>
   <h1>✦ 聖書釈義ツール</h1>
   <span>Bible Exegesis Tool — 歴史・文化・考古学・信頼性チェック</span>
+  <a class="nav-link" href="/illustrations">説教例話ツール →</a>
 </header>
 
 <div class="layout">
@@ -579,7 +583,367 @@ def _sse_error(msg: str) -> Response:
     return Response(stream_with_context(gen()), mimetype="text/event-stream")
 
 
+# ── 説教例話ツール HTML ───────────────────────────────────────────────────
+
+ILLUS_HTML = r"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>説教例話収集ツール</title>
+<style>
+  :root {
+    --bg: #1a1a2e; --card: #16213e; --accent: #0f3460;
+    --gold: #e2b96f; --text: #e8e8e8; --muted: #8a8a9a;
+    --green: #4caf82; --border: #2d3561;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', 'Noto Sans JP', sans-serif; min-height: 100vh; }
+
+  header { background: var(--accent); padding: 1.2rem 2rem; border-bottom: 2px solid var(--gold); display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.4rem; color: var(--gold); letter-spacing: .05em; }
+  header a { color: var(--muted); font-size: .82rem; text-decoration: none; margin-left: auto; border: 1px solid var(--border); padding: .3rem .8rem; border-radius: 4px; }
+  header a:hover { border-color: var(--gold); color: var(--gold); }
+
+  .layout { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 64px); }
+
+  .sidebar { background: var(--card); border-right: 1px solid var(--border); padding: 1.2rem; overflow-y: auto; max-height: calc(100vh - 64px); }
+  .sidebar h2 { color: var(--gold); font-size: .88rem; letter-spacing: .08em; margin-bottom: .8rem; text-transform: uppercase; }
+
+  .input-group { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1rem; }
+  .input-group label { color: var(--muted); font-size: .78rem; letter-spacing: .05em; }
+  .field {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: .9rem; padding: .6rem .9rem;
+    transition: border-color .2s; width: 100%;
+  }
+  .field:focus { outline: none; border-color: var(--gold); }
+  .field::placeholder { color: var(--muted); }
+  textarea.field { resize: vertical; min-height: 60px; font-family: inherit; }
+
+  .cats-grid { display: grid; grid-template-columns: 1fr; gap: .4rem; margin-bottom: 1rem; }
+  .cat-label { display: flex; align-items: center; gap: .5rem; font-size: .82rem; cursor: pointer; padding: .35rem .5rem; border-radius: 4px; border: 1px solid var(--border); transition: background .15s; }
+  .cat-label:hover { background: var(--accent); }
+  .cat-label input { accent-color: var(--gold); }
+
+  .btn {
+    background: var(--gold); color: #1a1a2e; border: none; border-radius: 6px;
+    font-size: .95rem; font-weight: 700; padding: .75rem;
+    cursor: pointer; transition: opacity .2s; width: 100%;
+  }
+  .btn:hover { opacity: .85; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  .main { padding: 1.5rem 2rem; overflow-y: auto; max-height: calc(100vh - 64px); }
+
+  .welcome { text-align: center; padding: 4rem 2rem; color: var(--muted); }
+  .welcome .big { font-size: 3rem; margin-bottom: 1rem; }
+  .welcome h2 { color: var(--gold); margin-bottom: .5rem; font-size: 1.2rem; }
+
+  #progress { display: none; margin-bottom: 1.2rem; }
+  .progress-bar-wrap { background: var(--border); border-radius: 99px; height: 4px; margin: .5rem 0; overflow: hidden; }
+  .progress-bar { height: 100%; background: var(--gold); border-radius: 99px; transition: width .3s; }
+  .progress-label { color: var(--muted); font-size: .82rem; }
+
+  .result-header { border-bottom: 2px solid var(--gold); padding-bottom: .8rem; margin-bottom: 1.2rem; }
+  .result-header h2 { font-size: 1.3rem; color: var(--gold); }
+  .result-meta { color: var(--muted); font-size: .8rem; margin-top: .3rem; }
+
+  .toolbar { display: flex; align-items: center; gap: .8rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .filter-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 99px; font-size: .75rem; padding: .25rem .7rem; cursor: pointer; transition: all .15s; }
+  .filter-btn:hover, .filter-btn.active { border-color: var(--gold); color: var(--gold); background: #e2b96f11; }
+  .count-badge { background: var(--gold); color: #1a1a2e; font-size: .7rem; font-weight: 700; padding: .1rem .4rem; border-radius: 99px; margin-left: .3rem; }
+
+  .illus-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 1rem; }
+
+  .illus-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.2rem; display: flex; flex-direction: column; gap: .5rem;
+    transition: border-color .2s;
+  }
+  .illus-card:hover { border-color: var(--gold); }
+
+  .card-top { display: flex; align-items: flex-start; gap: .6rem; }
+  .card-num { color: var(--gold); font-weight: 800; font-size: 1.1rem; min-width: 2rem; }
+  .card-title { font-weight: 700; font-size: .95rem; color: var(--text); line-height: 1.4; flex: 1; }
+  .cat-tag {
+    font-size: .68rem; font-weight: 700; padding: .15rem .5rem; border-radius: 3px;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .cat-0 { background: #2196f322; color: #42a5f5; border: 1px solid #42a5f544; }
+  .cat-1 { background: #ff572222; color: #ff7043; border: 1px solid #ff704344; }
+  .cat-2 { background: #4caf8222; color: #4caf82; border: 1px solid #4caf8244; }
+  .cat-3 { background: #ff980022; color: #ffa726; border: 1px solid #ffa72644; }
+  .cat-4 { background: #9c27b022; color: #ce93d8; border: 1px solid #ce93d844; }
+  .cat-5 { background: #e2b96f22; color: #e2b96f; border: 1px solid #e2b96f44; }
+
+  .card-content { font-size: .85rem; line-height: 1.75; color: var(--text); }
+  .card-divider { border: none; border-top: 1px solid var(--border); margin: .3rem 0; }
+  .card-application { font-size: .82rem; color: var(--green); line-height: 1.6; }
+  .card-application::before { content: "▶ "; }
+  .card-evidence { font-size: .73rem; color: var(--muted); line-height: 1.5; margin-top: .2rem; }
+  .card-evidence::before { content: "出典: "; font-weight: 700; }
+
+  .error-box { background: #e0505022; border: 1px solid #e05050; border-radius: 8px; padding: 1rem 1.2rem; color: #e05050; }
+
+  .streaming-dot { display: inline-block; animation: blink 1s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+    .main { max-height: none; }
+    .illus-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>✦ 説教例話収集ツール</h1>
+  <a href="/">← 聖書釈義ツール</a>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar">
+    <h2>条件を設定</h2>
+
+    <div class="input-group">
+      <label>聖書箇所（任意）</label>
+      <input id="passage" class="field" type="text" placeholder="例：ヨハネ3:16 / 詩篇23篇" autocomplete="off">
+    </div>
+
+    <div class="input-group">
+      <label>説教テーマ（任意）</label>
+      <input id="theme" class="field" type="text" placeholder="例：赦し、希望、信仰">
+    </div>
+
+    <div class="input-group">
+      <label>キーポイント（任意）</label>
+      <textarea id="keypoints" class="field" placeholder="例：神の愛の無条件性、回復の恵み"></textarea>
+    </div>
+
+    <div class="input-group">
+      <label>対象聴衆</label>
+      <select id="audience" class="field">
+        <option>一般会衆</option>
+        <option>青年・若者</option>
+        <option>子ども・ファミリー</option>
+        <option>シニア世代</option>
+        <option>求道者・ビジター</option>
+      </select>
+    </div>
+
+    <div class="input-group">
+      <label>素材カテゴリ（複数選択可）</label>
+      <div class="cats-grid" id="catsGrid"></div>
+    </div>
+
+    <button class="btn" id="generateBtn" onclick="startGenerate()">例話を30件生成する</button>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="welcome">
+      <div class="big">✦</div>
+      <h2>説教の例話・素材を自動収集</h2>
+      <p>聖書箇所やテーマを入力して生成ボタンを押してください<br>
+      実在の人物・出来事・研究データを用いたノンフィクション例話を30件生成します</p>
+    </div>
+  </main>
+
+</div>
+
+<script>
+const CATS = {{ cats_json }};
+const CAT_COLORS = ['cat-0','cat-1','cat-2','cat-3','cat-4','cat-5'];
+
+function catIndex(name) { return CATS.indexOf(name); }
+
+function initCats() {
+  const grid = document.getElementById('catsGrid');
+  grid.innerHTML = CATS.map((c, i) => `
+    <label class="cat-label">
+      <input type="checkbox" value="${c}" checked>
+      <span class="cat-tag ${CAT_COLORS[i]}">${c}</span>
+    </label>`).join('');
+}
+
+function getSelectedCats() {
+  return [...document.querySelectorAll('#catsGrid input:checked')].map(el => el.value);
+}
+
+function startGenerate() {
+  const passage = document.getElementById('passage').value.trim();
+  const theme = document.getElementById('theme').value.trim();
+  const keypoints = document.getElementById('keypoints').value.trim();
+  const audience = document.getElementById('audience').value;
+  const cats = getSelectedCats();
+
+  if (!passage && !theme && !keypoints) {
+    alert('聖書箇所・テーマ・キーポイントのいずれかを入力してください');
+    return;
+  }
+  if (cats.length === 0) {
+    alert('カテゴリを1つ以上選択してください');
+    return;
+  }
+
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.textContent = '生成中…';
+
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div id="progress">
+      <div class="progress-label" id="progressLabel">接続中<span class="streaming-dot">…</span></div>
+      <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width:5%"></div></div>
+    </div>
+    <div id="output"></div>`;
+  document.getElementById('progress').style.display = 'block';
+
+  const params = new URLSearchParams({ passage, theme, keypoints, audience, cats: cats.join(',') });
+  const evtSource = new EventSource('/generate_illustrations?' + params);
+  let resultData = null;
+
+  evtSource.addEventListener('progress', e => {
+    const d = JSON.parse(e.data);
+    document.getElementById('progressLabel').textContent = d.message;
+    document.getElementById('progressBar').style.width = d.pct + '%';
+  });
+
+  evtSource.addEventListener('result', e => { resultData = JSON.parse(e.data); });
+
+  evtSource.addEventListener('done', () => {
+    evtSource.close();
+    btn.disabled = false;
+    btn.textContent = '例話を30件生成する';
+    document.getElementById('progress').style.display = 'none';
+    if (resultData) renderResult(resultData);
+  });
+
+  evtSource.addEventListener('error_msg', e => {
+    evtSource.close();
+    btn.disabled = false;
+    btn.textContent = '例話を30件生成する';
+    document.getElementById('progress').style.display = 'none';
+    main.innerHTML = `<div class="error-box">⚠ エラー：${JSON.parse(e.data).message}</div>`;
+  });
+
+  evtSource.onerror = () => {
+    if (evtSource.readyState === EventSource.CLOSED) return;
+    evtSource.close();
+    btn.disabled = false;
+    btn.textContent = '例話を30件生成する';
+    main.innerHTML = `<div class="error-box">⚠ 接続エラーが発生しました</div>`;
+  };
+}
+
+let allIllustrations = [];
+let activeFilter = 'すべて';
+
+function renderResult(d) {
+  allIllustrations = d.illustrations || [];
+  activeFilter = 'すべて';
+
+  const main = document.getElementById('main');
+  const meta = [d.passage && `箇所: ${d.passage}`, d.theme && `テーマ: ${d.theme}`, d.audience && `対象: ${d.audience}`].filter(Boolean).join('　／　');
+  const countByCat = {};
+  allIllustrations.forEach(il => { countByCat[il.category] = (countByCat[il.category]||0)+1; });
+
+  const filterBtns = ['すべて', ...CATS].map(c => {
+    const cnt = c === 'すべて' ? allIllustrations.length : (countByCat[c]||0);
+    if (cnt === 0) return '';
+    return `<button class="filter-btn${c===activeFilter?' active':''}" onclick="applyFilter('${c}')">${c}<span class="count-badge">${cnt}</span></button>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div class="result-header">
+      <h2>✦ 説教例話 ${allIllustrations.length}件</h2>
+      <div class="result-meta">${meta}</div>
+    </div>
+    <div class="toolbar" id="filterBar">${filterBtns}</div>
+    <div class="illus-grid" id="illusGrid"></div>`;
+
+  renderCards(allIllustrations);
+}
+
+function applyFilter(cat) {
+  activeFilter = cat;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.startsWith(cat));
+  });
+  const filtered = cat === 'すべて' ? allIllustrations : allIllustrations.filter(il => il.category === cat);
+  renderCards(filtered);
+}
+
+function renderCards(items) {
+  const grid = document.getElementById('illusGrid');
+  grid.innerHTML = items.map(il => {
+    const ci = CAT_COLORS[catIndex(il.category)] || 'cat-0';
+    return `<div class="illus-card">
+      <div class="card-top">
+        <span class="card-num">${il.number}</span>
+        <span class="card-title">${esc(il.title)}</span>
+        <span class="cat-tag ${ci}">${esc(il.category)}</span>
+      </div>
+      <div class="card-content">${esc(il.content)}</div>
+      <hr class="card-divider">
+      <div class="card-application">${esc(il.application)}</div>
+      ${il.evidence ? `<div class="card-evidence">${esc(il.evidence)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('DOMContentLoaded', initCats);
+</script>
+</body>
+</html>
+"""
+
+
+# ── 説教例話ルーティング ──────────────────────────────────────────────────
+
+@app.route("/illustrations")
+def illustrations():
+    cats_json = json.dumps(CATEGORIES, ensure_ascii=False)
+    return render_template_string(ILLUS_HTML, cats_json=cats_json)
+
+
+@app.route("/generate_illustrations")
+def gen_illustrations():
+    passage = request.args.get("passage", "").strip()
+    theme = request.args.get("theme", "").strip()
+    keypoints = request.args.get("keypoints", "").strip()
+    audience = request.args.get("audience", "一般会衆").strip()
+    cats_raw = request.args.get("cats", "")
+    selected_cats = [c for c in cats_raw.split(",") if c] if cats_raw else CATEGORIES
+
+    def generate():
+        try:
+            client = _get_client()
+            for item in generate_illustrations(
+                client, passage, theme, keypoints, audience, selected_cats
+            ):
+                yield _sse(item["event"], item["data"])
+        except Exception as e:
+            traceback.print_exc()
+            yield _sse("error_msg", {"message": str(e)})
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"聖書釈義ツール起動中 → http://localhost:{port}")
+    print(f"説教例話ツール    → http://localhost:{port}/illustrations")
     app.run(host="0.0.0.0", port=port, debug=False)
