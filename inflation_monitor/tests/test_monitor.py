@@ -50,6 +50,28 @@ def test_quarterly_same_release_no_alert():
     assert alerts == []
 
 
+def test_bei_oscillating_at_threshold_alerts_once():
+    """2.0%付近での小刻みな往復で通知が連発しないこと（ヒステリシス）。"""
+    entry = make_entry([obs("2026-08-03", 1.98).to_dict()])
+    # 明確に上抜け → 1回だけ通知
+    alerts = evaluate("bei_10y", entry, obs("2026-08-04", 2.04), None)
+    assert sum("2.0" in a and "上抜け" in a for a in alerts) == 1
+    # 2.0 をわずかに割り込む程度では下抜け通知を出さない
+    assert evaluate("bei_10y", entry, obs("2026-08-05", 1.99), None) == []
+    assert evaluate("bei_10y", entry, obs("2026-08-06", 2.01), None) == []
+    # 不感帯を明確に超えて割り込めば通知する
+    alerts = evaluate("bei_10y", entry, obs("2026-08-07", 1.95), None)
+    assert any("2.0" in a and "下抜け" in a for a in alerts)
+
+
+def test_threshold_state_seeded_from_history_without_alert():
+    """履歴はあるが状態が未記録の場合、前回値で初期化し誤通知しない。"""
+    entry = make_entry([obs("2026-08-06", 2.05).to_dict()])
+    alerts = evaluate("bei_10y", entry, obs("2026-08-07", 2.06), None)
+    assert alerts == []
+    assert entry["threshold_state"]["2.0"] == "above"
+
+
 def test_survey_crossing_50():
     entry = make_entry([obs("2026-03-01", 49.0).to_dict()])
     alerts = evaluate("survey_5y_kanari", entry, obs("2026-06-01", 51.3), None)

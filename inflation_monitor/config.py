@@ -4,10 +4,16 @@
 BEI_MOVE_ALERT_PP = 0.10
 
 # BEI: この水準（%）をまたいだら通知
-BEI_LEVEL_THRESHOLDS = [2.0]
+BEI_LEVEL_THRESHOLDS = [1.8, 2.0, 2.2]
 
 # 生活意識アンケート「かなり上がる」割合: この水準（%）をまたいだら通知
 SURVEY_LEVEL_THRESHOLDS = [50.0]
+
+# 閾値通知の不感帯（ヒステリシス）。閾値のすぐ近くで値が往復しても、
+# この幅を超えて明確に抜けるまで再通知しない。
+# BEI は 2% 近辺で推移しており、これが無いと毎日通知が飛ぶ。
+BEI_THRESHOLD_BAND_PP = 0.03
+SURVEY_THRESHOLD_BAND_PP = 0.5
 
 # 四半期指標: 前回観測からこの日数を超えて新データが無ければ「公表遅延？」通知
 QUARTERLY_OVERDUE_DAYS = 110

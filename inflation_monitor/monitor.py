@@ -3,6 +3,7 @@
 使い方:
     python -m inflation_monitor.monitor run            # 3指標を取得・履歴更新・通知判定
     python -m inflation_monitor.monitor run --only bei # 1指標のみ
+    python -m inflation_monitor.monitor check          # 履歴を変えずに取得可否だけ診断
     python -m inflation_monitor.monitor add tankan_5y 2026-07-01 2.6  # 手動で値を登録
 
 出力（--data-dir、既定 inflation_monitor/data/）:
@@ -61,8 +62,32 @@ def latest_obs(entry: dict) -> dict | None:
 
 # ---------------------------------------------------------------- alert rules
 
-def crossed(thresholds: list[float], prev: float, new: float) -> list[float]:
-    return [t for t in thresholds if (prev < t <= new) or (prev >= t > new)]
+def check_thresholds(
+    entry: dict, thresholds: list[float], value: float, band: float
+) -> list[tuple[float, str]]:
+    """閾値の上抜け／下抜けをヒステリシス付きで判定する。
+
+    各閾値について「上にいる／下にいる」状態を entry に保持し、band を超えて
+    明確に反対側へ抜けたときだけ状態を反転して通知する。閾値ぎりぎりで値が
+    往復しても通知が連発しない（シュミットトリガ）。
+
+    戻り値: [(閾値, "上抜け"|"下抜け"), ...]
+    """
+    state = entry.setdefault("threshold_state", {})
+    events: list[tuple[float, str]] = []
+    for t in thresholds:
+        key = str(t)
+        current = state.get(key)
+        if current is None:  # 初回観測は基準の記録のみ。通知しない
+            state[key] = "above" if value >= t else "below"
+            continue
+        if current == "below" and value >= t + band:
+            state[key] = "above"
+            events.append((t, "上抜け"))
+        elif current == "above" and value <= t - band:
+            state[key] = "below"
+            events.append((t, "下抜け"))
+    return events
 
 
 def evaluate(key: str, entry: dict, new_obs: Observation | None, error: str | None) -> list[str]:
@@ -105,17 +130,22 @@ def evaluate(key: str, entry: dict, new_obs: Observation | None, error: str | No
             line += f"\n  - 注記: {new_obs.note}"
         alerts.append(line)
 
-    if is_new and prev and prev.get("value") is not None and new_obs.value is not None:
-        thresholds = {
-            "bei_10y": config.BEI_LEVEL_THRESHOLDS,
-            "survey_5y_kanari": config.SURVEY_LEVEL_THRESHOLDS,
-        }.get(key, [])
-        for t in crossed(thresholds, prev["value"], new_obs.value):
-            direction = "上抜け" if new_obs.value >= t else "下抜け"
+    if is_new and new_obs.value is not None:
+        thresholds, band = {
+            "bei_10y": (config.BEI_LEVEL_THRESHOLDS, config.BEI_THRESHOLD_BAND_PP),
+            "survey_5y_kanari": (config.SURVEY_LEVEL_THRESHOLDS, config.SURVEY_THRESHOLD_BAND_PP),
+        }.get(key, ([], 0.0))
+        # 既存履歴から引き継いだ場合、まず前回値で状態を初期化する（通知は出さない）
+        if not entry.get("threshold_state") and prev and prev.get("value") is not None:
+            check_thresholds(entry, thresholds, prev["value"], band)
+        from_str = f"{prev['date']}: {prev['value']} → " if prev and prev.get("value") is not None else ""
+        for t, direction in check_thresholds(entry, thresholds, new_obs.value, band):
             alerts.append(
                 f"🚨 **{label}**: {t}{meta['unit']} を{direction}しました "
-                f"（{prev['date']}: {prev['value']} → {new_obs.date}: {new_obs.value}）"
+                f"（{from_str}{new_obs.date}: {new_obs.value}）"
             )
+
+    if is_new and prev and prev.get("value") is not None and new_obs.value is not None:
         if key == "bei_10y":
             move = round(new_obs.value - prev["value"], 3)
             if abs(move) >= config.BEI_MOVE_ALERT_PP:
@@ -222,6 +252,40 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """履歴を書き換えずに、各フェッチャーが実データから何を取れるか診断する。
+
+    ネットワークが使える環境（GitHub Actions 等）で実行し、抽出結果とその
+    信頼度を目視確認するための窓口。終了コードは失敗件数。
+    """
+    print("=== inflation_monitor 取得診断 ===")
+    print(f"実行日 (JST): {today_jst().isoformat()}\n")
+    failures = 0
+    for key, meta in config.INDICATORS.items():
+        print(f"■ {key} — {meta['label']}")
+        print(f"  出所ページ: {meta['source_page']}")
+        try:
+            obs = FETCHERS[key]()
+        except Exception as exc:  # noqa: BLE001 - 診断なので全て捕捉して表示
+            failures += 1
+            print(f"  結果: ❌ 取得失敗\n  エラー: {exc}\n")
+            continue
+        mark = "✅" if obs.confidence == "high" else "⚠️"
+        value = f"{obs.value}{meta['unit']}" if obs.value is not None else "（抽出できず）"
+        print(f"  結果: {mark} 基準日 {obs.date} / 値 {value} / 信頼度 {obs.confidence}")
+        print(f"  取得元ファイル: {obs.source_url}")
+        if obs.note:
+            print(f"  注記: {obs.note}")
+        if obs.value is None or obs.confidence != "high":
+            failures += 1
+        print()
+    if failures:
+        print(f"要確認: {failures} 件。値が誤っていれば `add` コマンドで手動登録できます。")
+    else:
+        print("3指標すべて高信頼で取得できました。")
+    return 1 if failures else 0
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     data_dir = Path(args.data_dir)
     key = ALIASES.get(args.indicator, args.indicator)
@@ -252,6 +316,9 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="全指標を取得して履歴・通知を更新")
     p_run.add_argument("--only", help="bei / tankan / survey のいずれか")
     p_run.set_defaults(func=cmd_run)
+
+    p_check = sub.add_parser("check", help="履歴を変えずに取得可否と抽出値を診断")
+    p_check.set_defaults(func=cmd_check)
 
     p_add = sub.add_parser("add", help="観測値を手動登録")
     p_add.add_argument("indicator")

@@ -1,2 +1,4 @@
 exegesis_*.json
 __pycache__/
+inflation_monitor/data/alert_title.txt
+inflation_monitor/data/alert_body.md

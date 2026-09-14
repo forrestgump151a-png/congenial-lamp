@@ -5,6 +5,12 @@ on:
     # 平日 09:15 JST（= 00:15 UTC）。BEIの前営業日引値と、四半期公表の検知を毎朝チェック
     - cron: "15 0 * * 1-5"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "run = 取得して履歴更新・通知 / check = 取得可否の診断のみ（履歴もIssueも変更しない）"
+        type: choice
+        options: [run, check]
+        default: run
 
 permissions:
   contents: write
@@ -28,10 +34,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r inflation_monitor/requirements.txt
 
+      - name: Check fetchers (diagnostics only)
+        if: ${{ inputs.mode == 'check' }}
+        run: python -m inflation_monitor.monitor check
+
       - name: Run monitor
+        if: ${{ inputs.mode != 'check' }}
         run: python -m inflation_monitor.monitor run
 
       - name: Commit updated data
+        if: ${{ inputs.mode != 'check' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -42,7 +54,7 @@ jobs:
           fi
 
       - name: Open alert issue
-        if: ${{ hashFiles('inflation_monitor/data/alert_body.md') != '' }}
+        if: ${{ inputs.mode != 'check' && hashFiles('inflation_monitor/data/alert_body.md') != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
